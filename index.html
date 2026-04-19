@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes">
+    <title>Golf Scorekeeper</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f0f7f0;
+        }
+        h1 { color: #2d5a2c; text-align: center; }
+        .admin-panel, .viewer-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .admin-panel { border-left: 4px solid #ff9800; }
+        .viewer-panel { border-left: 4px solid #4caf50; }
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .badge-admin { background: #ff9800; color: white; }
+        .badge-viewer { background: #4caf50; color: white; }
+        input, button {
+            padding: 10px;
+            margin: 5px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        button {
+            background: #4caf50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:active { background: #45a049; }
+        .player-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px;
+            margin: 8px 0;
+            background: #f9f9f9;
+            border-radius: 8px;
+        }
+        .player-name { font-weight: bold; flex: 1; }
+        .player-score { font-size: 24px; font-weight: bold; margin: 0 15px; min-width: 60px; text-align: center; }
+        .admin-controls { display: flex; gap: 8px; }
+        .refresh-btn {
+            background: #2196f3;
+            width: 100%;
+            margin-top: 10px;
+            font-size: 18px;
+            padding: 12px;
+        }
+        .admin-key-input {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            font-family: monospace;
+        }
+        .error { color: red; font-size: 14px; margin-top: 5px; }
+        .success { color: green; }
+        hr { margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <h1>⛳ Golf Scorekeeper</h1>
+    
+    <div id="adminAuth" style="display: none;">
+        <div class="admin-panel">
+            <div class="badge badge-admin">Admin Mode Active</div>
+            <h3>Admin Controls</h3>
+            
+            <div>
+                <input type="text" id="newPlayerName" placeholder="Player name">
+                <button onclick="addPlayer()">➕ Add Player</button>
+            </div>
+            
+            <div id="playersList"></div>
+            
+            <button onclick="resetAllScores()" style="background: #ff5722;">🔄 Reset All Scores to 0</button>
+            <button onclick="logoutAdmin()" style="background: #999;">🚪 Exit Admin Mode</button>
+        </div>
+    </div>
+    
+    <div id="viewerPanel" class="viewer-panel">
+        <div class="badge badge-viewer">View-Only Mode</div>
+        <div id="scoresDisplay">
+            <p>Loading scores...</p>
+        </div>
+        <button class="refresh-btn" onclick="fetchScores()">⟳ Refresh Scores</button>
+    </div>
+    
+    <div id="adminLoginPanel" class="admin-panel">
+        <h3>Admin Login</h3>
+        <p>Enter admin key to enable editing:</p>
+        <input type="password" id="adminKeyInput" class="admin-key-input" placeholder="Enter admin key">
+        <button onclick="loginAsAdmin()">🔑 Enable Admin Mode</button>
+        <div id="loginError" class="error"></div>
+    </div>
+
+    <script>
+        let isAdmin = false;
+        let adminKey = '';
+        let currentData = { players: [], scores: {} };
+
+        // Fetch current scores from server
+        async function fetchScores() {
+            try {
+                const response = await fetch('/api/scores');
+                const data = await response.json();
+                currentData = data;
+                updateDisplay();
+            } catch (error) {
+                console.error('Error fetching scores:', error);
+            }
+        }
+
+        // Update UI based on current data and admin status
+        function updateDisplay() {
+            const scoresDiv = document.getElementById('scoresDisplay');
+            if (!currentData.players || currentData.players.length === 0) {
+                scoresDiv.innerHTML = '<p>No players added yet. (Admin needs to add players)</p>';
+                return;
+            }
+            
+            let html = '';
+            currentData.players.forEach(player => {
+                const score = currentData.scores[player] || 0;
+                html += `
+                    <div class="player-row">
+                        <div class="player-name">${escapeHtml(player)}</div>
+                        <div class="player-score">${score}</div>
+                        ${isAdmin ? `
+                            <div class="admin-controls">
+                                <button onclick="adjustScore('${player}', -1)">-1</button>
+                                <button onclick="adjustScore('${player}', 1)">+1</button>
+                                <button onclick="setScoreManually('${player}')">Set</button>
+                                <button onclick="removePlayer('${player}')" style="background:#f44336;">🗑️</button>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            });
+            scoresDiv.innerHTML = html;
+        }
+
+        // Helper to escape HTML
+        function escapeHtml(str) {
+            return str.replace(/[&<>]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                return m;
+            });
+        }
+
+        // Admin functions
+        async function addPlayer() {
+            const name = document.getElementById('newPlayerName').value.trim();
+            if (!name) return alert('Enter a player name');
+            
+            const response = await fetch('/api/admin/add-player', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: adminKey, playerName: name })
+            });
+            
+            if (response.ok) {
+                document.getElementById('newPlayerName').value = '';
+                await fetchScores();
+            } else {
+                alert('Failed to add player. Make sure you are admin.');
+            }
+        }
+        
+        async function removePlayer(playerName) {
+            if (!confirm(`Remove ${playerName}?`)) return;
+            const response = await fetch('/api/admin/remove-player', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: adminKey, playerName })
+            });
+            if (response.ok) await fetchScores();
+        }
+        
+        async function adjustScore(playerName, delta) {
+            const currentScore = currentData.scores[playerName] || 0;
+            const newScore = Math.max(0, currentScore + delta);
+            await setScore(playerName, newScore);
+        }
+        
+        async function setScoreManually(playerName) {
+            const newScore = prompt(`Enter new score for ${playerName}:`, currentData.scores[playerName]);
+            if (newScore !== null && !isNaN(parseInt(newScore))) {
+                await setScore(playerName, parseInt(newScore));
+            }
+        }
+        
+        async function setScore(playerName, score) {
+            const response = await fetch('/api/admin/update-score', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: adminKey, playerName, score })
+            });
+            if (response.ok) await fetchScores();
+        }
+        
+        async function resetAllScores() {
+            if (!confirm('Reset all scores to 0?')) return;
+            const response = await fetch('/api/admin/reset-scores', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: adminKey })
+            });
+            if (response.ok) await fetchScores();
+        }
+        
+        async function loginAsAdmin() {
+            const key = document.getElementById('adminKeyInput').value;
+            const response = await fetch('/api/admin/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key })
+            });
+            
+            const result = await response.json();
+            if (result.success) {
+                isAdmin = true;
+                adminKey = key;
+                document.getElementById('adminAuth').style.display = 'block';
+                document.getElementById('adminLoginPanel').style.display = 'none';
+                document.getElementById('viewerPanel').classList.add('admin-panel');
+                document.getElementById('loginError').innerHTML = '';
+                await fetchScores();
+            } else {
+                document.getElementById('loginError').innerHTML = 'Invalid admin key';
+            }
+        }
+        
+        function logoutAdmin() {
+            isAdmin = false;
+            adminKey = '';
+            document.getElementById('adminAuth').style.display = 'none';
+            document.getElementById('adminLoginPanel').style.display = 'block';
+            document.getElementById('viewerPanel').classList.remove('admin-panel');
+            fetchScores();
+        }
+        
+        // Auto-refresh every 30 seconds (optional)
+        setInterval(fetchScores, 30000);
+        
+        // Initial load
+        fetchScores();
+    </script>
+</body>
+</html>
